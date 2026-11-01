@@ -1,12 +1,15 @@
-# Trigger the workspace repo's flake-sync convergence after a push to
-# main, via workflow_dispatch. The credential is a one-hour installation
-# token minted per run from the dispatch GitHub App, which holds only
-# Actions read/write on the workspace repo — it can start workflow runs
-# there, never touch repo contents. Pin-update pushes are converge's own
-# output and are skipped — dispatching for them would only queue a no-op
-# run.
-# Reference: ch-nix-workspace docs/development/flake-sync.md
-# § Scheduled convergence.
+# SPDX-License-Identifier: MIT
+#
+# After a push to main, this workflow asks the maintainer's workspace
+# repository (clhodapp/ch-nix-workspace, private) to run its `converge`
+# workflow, which re-pins this repository in the flakes that consume it.
+# The credential is a one-hour installation token minted per run from a
+# GitHub App that holds only Actions read/write on the workspace
+# repository: it can start workflow runs there and cannot touch the
+# repository's contents. The job runs only in repositories owned by
+# clhodapp, so a fork's push to its own main skips it. Pushes of pin
+# updates are the converge run's own output and are skipped as well,
+# since dispatching for them would only queue a run with nothing to do.
 
 name: notify-workspace
 
@@ -18,7 +21,7 @@ permissions: {}
 
 jobs:
   dispatch:
-    if: "!startsWith(github.event.head_commit.message, 'maint: update flake pins')"
+    if: "github.repository_owner == 'clhodapp' && !startsWith(github.event.head_commit.message, 'maint: update flake pins')"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
