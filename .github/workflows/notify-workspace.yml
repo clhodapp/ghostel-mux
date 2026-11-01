@@ -1,0 +1,43 @@
+# Trigger the workspace repo's flake-sync convergence after a push to
+# main, via workflow_dispatch. The credential is a one-hour installation
+# token minted per run from the dispatch GitHub App, which holds only
+# Actions read/write on the workspace repo — it can start workflow runs
+# there, never touch repo contents. Pin-update pushes are converge's own
+# output and are skipped — dispatching for them would only queue a no-op
+# run.
+# Reference: ch-nix-workspace docs/development/flake-sync.md
+# § Scheduled convergence.
+
+name: notify-workspace
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  dispatch:
+    if: "!startsWith(github.event.head_commit.message, 'maint: update flake pins')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mint the dispatch app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.WORKSPACE_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.WORKSPACE_DISPATCH_APP_PRIVATE_KEY }}
+          owner: clhodapp
+          repositories: ch-nix-workspace
+
+      - name: Trigger converge on ch-nix-workspace
+        env:
+          TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/clhodapp/ch-nix-workspace/actions/workflows/converge.yml/dispatches \
+            -d "{\"ref\":\"main\",\"inputs\":{\"source_repo\":\"${GITHUB_REPOSITORY}\",\"source_sha\":\"${GITHUB_SHA}\"}}"
