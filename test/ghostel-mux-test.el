@@ -193,8 +193,10 @@ Each prompt is pushed onto the variable named PROMPTS."
   (dolist (id ids)
     (when-let* ((buffer (ghostel-mux-test--buffer-of id)))
       (kill-buffer buffer))
+    ;; Killing the buffer already ends its session, which may exit between
+    ;; the listing and the kill; a kill that finds no session is fine here.
     (when (ghostel-mux-test--session id)
-      (ghostel-mux--run "kill" id))))
+      (ignore-errors (ghostel-mux--run "kill" id)))))
 
 (ert-deftest ghostel-mux-adopt-detached-adopts-orphans-only ()
   "Orphaned terminals are adopted; terminals this Emacs shows are left alone."
