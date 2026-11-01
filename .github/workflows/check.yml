@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT
+#
+# Runs ghostel-mux's test suites on every push to main and every pull
+# request. ghostel-mux-nix builds ghostel-mux and runs the suites as its
+# flake checks, so this runs those checks with ghostel-mux-nix's
+# ghostel-mux-src input pointed at the commit under test: the protocol
+# tests, the hook tests and the end-to-end tests against ghostel with
+# the patch applied, and a NixOS VM test of the systemd launcher, which
+# needs KVM. libghostty-vt, ghostel's patched native module and the
+# Emacs around it come from the clhodapp cache, where ghostel-mux-nix's
+# main pushes them; this run only reads that cache, so a run builds
+# the program and whatever this commit changes.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # The NixOS VM test runs QEMU with KVM; the hosted runners have
+      # /dev/kvm but only root may open it.
+      - name: Open KVM to the build users
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            sandbox = true
+            system-features = nixos-test benchmark big-parallel kvm
+
+      # Pull from the clhodapp cache; a public cache needs no credentials
+      # to read, and this run has none. Nothing is pushed from here.
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: clhodapp
+          skipPush: true
+          # The clhodapp cache's upstreams, which a user of it pulls
+          # from too.
+          extraPullNames: nix-community,numtide
+
+      - name: Run ghostel-mux-nix's checks against this commit
+        run: |
+          nix flake check --print-build-logs github:clhodapp/ghostel-mux-nix \
+            --override-input ghostel-mux-src "path:$GITHUB_WORKSPACE"
