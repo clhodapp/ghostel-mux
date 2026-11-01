@@ -1,0 +1,402 @@
+This patch adds two hooks to ghostel's native module,
+ghostel--new-from-snapshot and ghostel--connect-native-socket.  It
+applies to ghostel 0.60.0.
+
+Copyright (C) 2026 Chris Hodapp
+SPDX-License-Identifier: GPL-3.0-or-later
+
+This patch modifies ghostel, which is licensed under the GNU General
+Public License, version 3 or later, and is licensed the same way.  See
+COPYING.
+
+--- a/src/backend_types.zig
++++ b/src/backend_types.zig
+@@ -5,6 +5,16 @@
+     args: [][:0]const u8,
+     env: *const std.process.Environ.Map,
+     cwd: ?[:0]const u8 = null,
++    /// When set, connect to a Unix stream socket instead of spawning FILE.
++    socket: ?SocketParams = null,
++};
++
++/// A Unix stream socket that stands in for a PTY primary.  Whatever listens
++/// on PATH relays bytes to and from a terminal it owns; REPLICA_NAME names
++/// that terminal's TTY so password-prompt detection can read its flags.
++pub const SocketParams = struct {
++    path: [:0]const u8,
++    replica_name: [:0]const u8 = "",
+ };
+ 
+ pub const WinSize = struct {
+--- a/src/posix.h
++++ b/src/posix.h
+@@ -4,5 +4,7 @@
+ #include <signal.h>
+ #include <stdlib.h>
+ #include <sys/ioctl.h>
++#include <sys/socket.h>
++#include <sys/un.h>
+ #include <sys/wait.h>
+ #include <termios.h>
+--- a/src/PosixPtyProcess.zig
++++ b/src/PosixPtyProcess.zig
+@@ -128,6 +128,8 @@
+ };
+ 
+ pty: Pty,
++/// The child's pid, or -1 when `pty.primary_fd' is a connected socket and
++/// there is no child to resize, query or reap.
+ pid: sys.pid_t = -1,
+ wake_pipe: [2]sys.fd_t = .{ -1, -1 },
+ 
+@@ -193,6 +195,79 @@
+     }
+ }
+ 
++/// Like `writeWithRetry', but a socket whose peer has gone reports EPIPE
++/// instead of raising SIGPIPE in whichever thread wrote.
++fn sendWithRetry(fd: sys.fd_t, data: []const u8) isize {
++    // From Zig's own definitions: glibc's MSG_NOSIGNAL is a macro naming an
++    // enum constant, which translated C does not carry.
++    const flags: c_int = if (@hasDecl(std.posix.MSG, "NOSIGNAL")) std.posix.MSG.NOSIGNAL else 0;
++    while (true) {
++        const written = c.send(fd, data.ptr, data.len, flags);
++        if (sys.errno(written) != .INTR) return written;
++    }
++}
++
++fn isSocket(self: *const Self) bool {
++    return self.pid == -1;
++}
++
++fn initSocket(params: backend_types.SocketParams) !Self {
++    var self = Self{ .pty = .{} };
++    errdefer self.pty.deinit();
++
++    if (params.replica_name.len >= self.pty.replica_name.len) return error.NameTooLong;
++    @memcpy(self.pty.replica_name[0..params.replica_name.len], params.replica_name);
++    self.pty.replica_name[params.replica_name.len] = 0;
++
++    var addr = std.mem.zeroes(c.struct_sockaddr_un);
++    addr.sun_family = c.AF_UNIX;
++    if (params.path.len >= addr.sun_path.len) return error.NameTooLong;
++    @memcpy(addr.sun_path[0..params.path.len], params.path);
++
++    self.pty.primary_fd = c.socket(c.AF_UNIX, c.SOCK_STREAM, 0);
++    if (self.pty.primary_fd < 0) return error.SocketFailed;
++    _ = try fcntl(self.pty.primary_fd, sys.F.SETFD, sys.FD_CLOEXEC);
++    if (@hasDecl(c, "SO_NOSIGPIPE")) {
++        const one: c_int = 1;
++        if (c.setsockopt(self.pty.primary_fd, c.SOL_SOCKET, c.SO_NOSIGPIPE, &one, @sizeOf(c_int)) != 0) {
++            return error.SetSockOptFailed;
++        }
++    }
++    while (true) {
++        // Zig's binding, because glibc declares the address argument as a
++        // transparent union that translated C cannot pass a pointer to.
++        const rc = sys.connect(
++            self.pty.primary_fd,
++            @ptrCast(&addr),
++            @sizeOf(c.struct_sockaddr_un),
++        );
++        switch (sys.errno(rc)) {
++            .SUCCESS => break,
++            .INTR => continue,
++            else => return error.ConnectFailed,
++        }
++    }
++
++    if (sys.errno(sys.pipe(&self.wake_pipe)) != .SUCCESS) {
++        return error.PipeCreationFailed;
++    }
++    errdefer {
++        _ = sys.close(self.wake_pipe[0]);
++        _ = sys.close(self.wake_pipe[1]);
++    }
++    for (self.wake_pipe) |fd| {
++        _ = try fcntl(fd, sys.F.SETFD, sys.FD_CLOEXEC);
++    }
++
++    const flags = try fcntl(self.pty.primary_fd, sys.F.GETFL, 0);
++    _ = try fcntl(
++        self.pty.primary_fd,
++        sys.F.SETFL,
++        flags | @as(u32, @bitCast(sys.O{ .NONBLOCK = true })),
++    );
++    return self;
++}
++
+ fn pollWithRetry(pollfds: []sys.pollfd, timeout: c_int) c_int {
+     while (true) {
+         const result = sys.poll(pollfds.ptr, @intCast(pollfds.len), timeout);
+@@ -208,6 +283,8 @@
+ }
+ 
+ pub fn init(alloc: Allocator, _: std.Io, size: backend_types.WinSize, params: backend_types.ProcessParams) !Self {
++    if (params.socket) |socket| return initSocket(socket);
++
+     var self = Self{ .pty = try .init() };
+     errdefer self.pty.deinit();
+     try self.pty.resize(size);
+@@ -272,10 +349,13 @@
+ }
+ 
+ pub fn resize(self: *Self, size: backend_types.WinSize) !void {
++    // The process behind a socket learns its size from its own protocol.
++    if (self.isSocket()) return;
+     try self.pty.resize(size);
+ }
+ 
+ pub fn foregroundPgid(self: *Self) ?i32 {
++    if (self.isSocket()) return null;
+     return self.pty.foregroundPgid();
+ }
+ 
+@@ -288,12 +368,15 @@
+ 
+     const chunk = data[0..@min(data.len, WRITE_CHUNK_SIZE)];
+     while (true) {
+-        const written = writeWithRetry(self.pty.primary_fd, chunk);
++        const written = if (self.isSocket())
++            sendWithRetry(self.pty.primary_fd, chunk)
++        else
++            writeWithRetry(self.pty.primary_fd, chunk);
+         if (written == 0) return error.IoFailed;
+         switch (sys.errno(written)) {
+             .SUCCESS => return .{ .written = @intCast(written) },
+ 
+-            .PIPE, .IO, .SRCH, .NXIO => return .interrupted,
++            .PIPE, .IO, .SRCH, .NXIO, .CONNRESET => return .interrupted,
+ 
+             .AGAIN => {
+                 var pollfds = [_]sys.pollfd{
+@@ -353,12 +436,14 @@
+     const eof = pollfds[0].revents & sys.POLL.HUP != 0;
+     while (true) {
+         const len = sys.read(self.pty.primary_fd, &buf, buf.len);
+-        if (len == 0) return !eof;
++        // A socket reads zero bytes once its peer has closed, with or
++        // without POLLHUP.
++        if (len == 0) return !eof and !self.isSocket();
+         switch (sys.errno(len)) {
+             .SUCCESS => try stream.nextSlice(buf[0..@intCast(len)]),
+             .INTR => continue,
+             .AGAIN => return !eof,
+-            .BADF, .IO => return false,
++            .BADF, .IO, .CONNRESET => return false,
+             else => return error.ReadFailed,
+         }
+     }
+@@ -376,11 +461,14 @@
+     return self.pty.replicaName();
+ }
+ 
++/// Close the PTY and return the child's exit status.  A socket has no child;
++/// its exit status is 0, and the Lisp side that knows better replaces it.
+ pub fn deinitAndWait(self: *Self) u32 {
+-    std.debug.assert(self.pid > 0);
+     self.pty.deinit();
+     _ = sys.close(self.wake_pipe[0]);
+     _ = sys.close(self.wake_pipe[1]);
++    if (self.isSocket()) return 0;
++    std.debug.assert(self.pid > 0);
+     while (true) {
+         var status: c_int = undefined;
+         switch (sys.errno(sys.waitpid(self.pid, &status, 0))) {
+--- a/src/GhostelTerm.zig
++++ b/src/GhostelTerm.zig
+@@ -53,17 +53,58 @@
+     var opts = opts_arg;
+     opts.default_modes = .{ .grapheme_cluster = true };
+ 
++    var terminal: gt.Terminal = try .init(io, alloc, opts);
++    errdefer terminal.deinit(alloc);
++    return initWithTerminal(alloc, io, env, terminal);
++}
++
++/// Create a terminal whose state comes from a libghostty snapshot.
++///
++/// The snapshot supplies the grid, history, modes, colors, title and working
++/// directory.  Its VT parser must have been at ground when it was taken.
++/// Kitty image state is not part of a snapshot, so the image limits come
++/// from OPTS like those of a new terminal.
++pub fn initFromSnapshot(
++    alloc: Allocator,
++    io: std.Io,
++    env: emacs.Env,
++    snapshot: []const u8,
++    opts: gt.Terminal.Options,
++) !*Self {
++    var reader: std.Io.Reader = .fixed(snapshot);
++    var decoded = try gt.snapshot.decodeExact(alloc, io, &reader, .{
++        .max_continuation_bytes = 0,
++    });
++    defer decoded.deinit(alloc);
++
++    var terminal = decoded.toOwned();
++    errdefer terminal.deinit(alloc);
++    var screens = terminal.screens.all.iterator();
++    while (screens.next()) |entry| {
++        const screen = entry.value.*;
++        screen.kitty_images.setLimit(io, alloc, screen, opts.kitty_image_storage_limit);
++        screen.kitty_images.image_limits = opts.kitty_image_loading_limits;
++    }
++    return initWithTerminal(alloc, io, env, terminal);
++}
++
++/// Wrap TERMINAL, which the result then owns, with a stream and a renderer.
++fn initWithTerminal(
++    alloc: Allocator,
++    io: std.Io,
++    env: emacs.Env,
++    terminal: gt.Terminal,
++) !*Self {
+     const term = try alloc.create(Self);
+     errdefer alloc.destroy(term);
+ 
+     term.* = Self{
+         .alloc = alloc,
+         .io = io,
+-        .terminal = try .init(io, alloc, opts),
++        .terminal = terminal,
+         .renderer = undefined,
+         .stream = undefined,
+     };
+-    errdefer term.terminal.deinit(alloc);
+ 
+     term.stream = .init(.{ .allocator = alloc, .handler = .init(alloc, term, term) });
+     errdefer term.stream.deinit();
+@@ -322,6 +363,41 @@
+     return process.pidValue();
+ }
+ 
++pub fn connectNativeSocket(
++    self: *Self,
++    path: [:0]const u8,
++    replica_name: [:0]const u8,
++    event_fd: ChannelFd,
++) !void {
++    if (self.process != null) return error.ProcessAlreadyAttached;
++
++    const initial_size = blk: {
++        try self.lock();
++        defer self.unlock();
++        break :blk self.winSize();
++    };
++
++    var no_env: std.process.Environ.Map = .init(self.alloc);
++    defer no_env.deinit();
++    const process = try self.alloc.create(NativeProcess);
++    errdefer self.alloc.destroy(process);
++    try process.init(
++        self.alloc,
++        self.io,
++        initial_size,
++        ProcessParams{
++            .file = "",
++            .args = &.{},
++            .env = &no_env,
++            .socket = .{ .path = path, .replica_name = replica_name },
++        },
++        self,
++        event_fd,
++    );
++    self.process = process;
++    self.pty_size = initial_size;
++}
++
+ pub fn killNativeProcess(self: *Self) void {
+     if (self.process) |process| {
+         self.process = null;
+@@ -929,6 +1005,91 @@
+             }
+         },
+     },
++    .{
++        .name = "ghostel--new-from-snapshot",
++        .arity = .{ 1, 3 },
++        .doc =
++        \\Create a ghostel terminal from a libghostty snapshot.
++        \\
++        \\(ghostel--new-from-snapshot SNAPSHOT &optional KITTY-STORAGE-LIMIT KITTY-MEDIUMS)
++        \\
++        \\SNAPSHOT is a unibyte string holding one complete snapshot whose VT
++        \\parser was at ground.  The snapshot supplies the size, scrollback,
++        \\modes, colors, title and working directory.  KITTY-STORAGE-LIMIT
++        \\and KITTY-MEDIUMS are as for `ghostel--new'.
++        \\
++        \\The returned handle is buffer-affine, as for `ghostel--new'.
++        ,
++        .impl = struct {
++            pub fn call(env: emacs.Env, nargs: isize, args: [*c]emacs.Value) !emacs.Value {
++                const kitty_mediums: u32 = if (nargs > 2 and env.isNotNil(args[2]))
++                    (std.math.cast(u32, env.cast(i64, args[2])) orelse 0)
++                else
++                    0;
++                const opts: gt.Terminal.Options = .{
++                    .rows = 1,
++                    .cols = 1,
++                    .kitty_image_storage_limit = if (nargs > 1 and env.isNotNil(args[1]))
++                        (std.math.cast(usize, env.cast(i64, args[1])) orelse {
++                            return error.OutOfRange;
++                        })
++                    else
++                        320 * 1024 * 1024,
++                    .kitty_image_loading_limits = .{
++                        .file = (kitty_mediums & 0x1) != 0,
++                        .temporary_file = if ((kitty_mediums & 0x2) != 0)
++                            .{ .enabled = .{ .directory = temp_dir } }
++                        else
++                            .disabled,
++                        .shared_memory = (kitty_mediums & 0x4) != 0,
++                    },
++                };
++
++                var snapshot_buffer: ?[]u8 = null;
++                defer if (snapshot_buffer) |buf| module_alloc.free(buf);
++                const snapshot = try env.extractStringAlloc(module_alloc, args[0], &snapshot_buffer);
++
++                const term = try initFromSnapshot(module_alloc, module_io, env, snapshot, opts);
++                errdefer term.deinit();
++                return env.makeUserPtr(terminalFinalize, term);
++            }
++        },
++    },
++    .{
++        .name = "ghostel--connect-native-socket",
++        .arity = .{ 3, 4 },
++        .doc =
++        \\Connect TERM's native reader to the Unix stream socket at PATH.
++        \\
++        \\(ghostel--connect-native-socket TERM PATH PIPE &optional TTY-NAME)
++        \\
++        \\The socket stands in for a PTY primary: bytes read from it go to
++        \\TERM, and input and terminal replies are written to it.  PIPE plays
++        \\the same role as in `ghostel--spawn-native-process'.  There is no
++        \\child process, so resizing does not reach the process at the other
++        \\end of the socket, the foreground process group is unknown, and the
++        \\exit status written to PIPE when that process closes the socket is 0.
++        \\TTY-NAME, when non-nil, names the TTY whose echo flag drives
++        \\password-prompt detection.
++        \\
++        \\Signals an error on Windows.
++        ,
++        .impl = struct {
++            pub fn call(env: emacs.Env, nargs: isize, args: [*c]emacs.Value) !emacs.Value {
++                if (builtin.os.tag == .windows) return error.Unsupported;
++                const term = env.getUserPtr(Self, args[0]) orelse return error.InvalidTerminalHandle;
++                const path = try platform.extractProcessStringAlloc(module_alloc, env, args[1]);
++                defer module_alloc.free(path);
++                const tty_name = if (nargs > 3 and env.isNotNil(args[3]))
++                    try platform.extractProcessStringAlloc(module_alloc, env, args[3])
++                else
++                    try module_alloc.dupeSentinel(u8, "", 0);
++                defer module_alloc.free(tty_name);
++                try term.connectNativeSocket(path, tty_name, env.openChannel(args[2]));
++                return env.t();
++            }
++        },
++    },
+     .{
+         .name = "ghostel--pty-password-input-p",
+         .arity = .{ 1, 1 },
