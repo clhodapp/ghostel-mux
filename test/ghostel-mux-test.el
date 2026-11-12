@@ -99,7 +99,7 @@
 
 (defun ghostel-mux-test--snapshot-images (snapshot)
   "Build a terminal from SNAPSHOT and return how many images ghostel draws.
-The terminal lives in a temporary buffer, as in ghostel's own Kitty
+The terminal lives in a temporary buffer, as in the ghostel Kitty
 tests: ghostel emits image placements only on a graphical display, so
 the check is stubbed, and its renderer cannot measure glyphs for a
 displayed buffer in a batch Emacs."
@@ -301,7 +301,7 @@ Each prompt is pushed onto the variable named PROMPTS."
     (ghostel-mux-test--cleanup orphans)))
 
 (ert-deftest ghostel-mux-evil-is-separate ()
-  "Evil and ghostel-mux alone leave the session list with Evil's own keys."
+  "Evil and ghostel-mux alone leave the session list with the default Evil keys."
   (let ((output
          (with-temp-buffer
            (call-process (expand-file-name invocation-name invocation-directory) nil t nil

@@ -1,7 +1,7 @@
 //! Starting the shell on a new PTY.
 //!
 //! The PTY setup matches ghostel's native backend, so a program sees the same
-//! terminal whether ghostel or a session started it: the child gets its own
+//! terminal whether ghostel or a session started it: the child gets a new
 //! session with the PTY as controlling terminal, UTF-8 input mode on, and
 //! XON/XOFF flow control off so C-q and C-s reach the program.
 

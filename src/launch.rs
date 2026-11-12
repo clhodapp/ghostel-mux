@@ -2,7 +2,7 @@
 //!
 //! Emacs usually runs as a systemd user service, and stopping that service
 //! kills every process in its cgroup.  So when the systemd user manager is
-//! reachable, a session runs as its own transient service,
+//! reachable, a session runs as a separate transient service,
 //! `ghostel-mux-<id>.service`.  The service has `Type=notify`, so
 //! `systemd-run` returns once the session has bound its sockets.  Without
 //! systemd, the session detaches by forking twice and reports readiness over

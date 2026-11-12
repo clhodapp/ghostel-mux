@@ -1,5 +1,5 @@
-//! One terminal session: a command on a PTY, the session's own terminal
-//! state, and at most one owning Emacs.
+//! One terminal session: a command on a PTY, the session's copy of the
+//! terminal state, and at most one owning Emacs.
 //!
 //! The session is a single-threaded `poll(2)` loop.  Output from the PTY goes
 //! first to the owner's data stream and then into the session's terminal, so

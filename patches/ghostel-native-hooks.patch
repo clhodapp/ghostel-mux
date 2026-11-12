@@ -56,8 +56,8 @@ COPYING.
 +/// Like `writeWithRetry', but a socket whose peer has gone reports EPIPE
 +/// instead of raising SIGPIPE in whichever thread wrote.
 +fn sendWithRetry(fd: sys.fd_t, data: []const u8) isize {
-+    // From Zig's own definitions: glibc's MSG_NOSIGNAL is a macro naming an
-+    // enum constant, which translated C does not carry.
++    // From the std.posix definitions of Zig: MSG_NOSIGNAL in glibc is a macro
++    // naming an enum constant, which translated C does not carry.
 +    const flags: c_int = if (@hasDecl(std.posix.MSG, "NOSIGNAL")) std.posix.MSG.NOSIGNAL else 0;
 +    while (true) {
 +        const written = c.send(fd, data.ptr, data.len, flags);
@@ -142,7 +142,7 @@ COPYING.
  }
  
  pub fn resize(self: *Self, size: backend_types.WinSize) !void {
-+    // The process behind a socket learns its size from its own protocol.
++    // The process behind a socket learns its size through the socket protocol.
 +    if (self.isSocket()) return;
      try self.pty.resize(size);
  }

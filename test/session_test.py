@@ -1,6 +1,6 @@
 """Protocol tests for the ghostel-mux session process.
 
-Run with GHOSTEL_MUX set to the binary.  Each test gets its own
+Run with GHOSTEL_MUX set to the binary.  Each test gets a separate
 XDG_RUNTIME_DIR and starts sessions with the fork launcher.
 """
 

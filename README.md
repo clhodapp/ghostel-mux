@@ -1,7 +1,7 @@
 # ghostel-mux
 
 Terminals for [ghostel](https://github.com/dakra/ghostel) that outlive the
-Emacs showing them. Each terminal's shell runs in its own small session
+Emacs showing them. Each terminal's shell runs in a separate small session
 process, outside Emacs. When Emacs exits, crashes, or is replaced by a
 newer daemon, the shell keeps running. Another Emacs can then adopt the
 terminal with its screen, scrollback, title and modes intact, and ghostel
@@ -23,7 +23,7 @@ libghostty snapshot of its copy, cut at an exact point in the output, and
 then everything after that point. Ghostel builds its terminal from the
 snapshot, so nothing is replayed or redrawn.
 
-On the Emacs side, the bytes arrive on ghostel's own native reader thread,
+On the Emacs side, the bytes arrive on ghostel's native reader thread,
 as PTY output does, and are parsed off the main thread. Two hooks in
 ghostel's native module make that possible: `ghostel--new-from-snapshot`
 and `ghostel--connect-native-socket`. They live in
@@ -110,7 +110,7 @@ Killing a terminal buffer ends its session, as it ends the shell today.
 Setting `ghostel-mux-adopt-on-startup` adopts the detached sessions when
 the mode is turned on.
 
-The program has a command line of its own:
+The `ghostel-mux` program also has commands:
 
 ```sh
 ghostel-mux list            # every session, with owner and state

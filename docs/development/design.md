@@ -45,7 +45,7 @@ does. With no owner, output only updates the session's terminal.
 In Emacs, ghostel's native reader thread reads `data` and parses it under
 the terminal lock, exactly as it reads a PTY. Nothing on the output path
 runs on Emacs's main thread except rendering, which ghostel already
-schedules on its own timer.
+schedules on a timer.
 
 The table below gives measurements taken on an x86-64 Linux desktop with
 release builds.
@@ -76,12 +76,12 @@ mid-sequence, the session feeds further PTY output into its terminal with
 `ghostty_terminal_vt_write_until_ground` and cuts at the first byte where
 the parser reaches ground; the rest of that chunk goes to the owner. If the
 parser has not reached ground after one second, or the PTY has already
-closed, the session cancels the unfinished sequence in its own terminal
+closed, the session cancels the unfinished sequence in the session's terminal
 with CAN and cuts there.
 
 In Emacs, `ghostel-mux-adopt` binds the snapshot and lets ghostel create
 its buffer as usual. Its advice on `ghostel--new` builds the terminal with
-`ghostel--new-from-snapshot` instead, so ghostel's own setup (window size,
+`ghostel--new-from-snapshot` instead, so ghostel's usual setup (window size,
 face palette, bold settings) applies on top of the restored state. The
 snapshot's title and directory reach ghostel's Lisp state through
 `ghostel--set-title` and `ghostel--update-directory`.

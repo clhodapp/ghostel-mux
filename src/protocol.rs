@@ -68,8 +68,8 @@ pub struct Size {
     pub cell_height: u32,
 }
 
-/// How the session's terminal keeps Kitty graphics images.  The owner sends
-/// its own settings, so images the program sends while no Emacs is attached
+/// How the session's terminal keeps Kitty graphics images.  The owning
+/// Emacs sends its settings, so images the program sends while no Emacs is attached
 /// are kept the way that Emacs would keep them.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Kitty {

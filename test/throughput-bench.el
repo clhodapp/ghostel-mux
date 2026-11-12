@@ -1,7 +1,7 @@
 ;;; throughput-bench.el --- Output throughput, session against native PTY -*- lexical-binding: t; -*-
 
 ;; Times how long `seq 1 N' takes to reach a ghostel terminal, once with
-;; ghostel's own native PTY and once through a ghostel-mux session.  Prints
+;; the native PTY of ghostel and once through a ghostel-mux session.  Prints
 ;; one line per run.
 
 (require 'ghostel-mux)

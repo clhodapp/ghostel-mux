@@ -1,4 +1,4 @@
-"""Throughput of a session on its own: PTY output through the session's
+"""Throughput of a session without Emacs: PTY output through the session's
 terminal and out of its data socket, read as fast as Python can.
 
 Run with GHOSTEL_MUX set to the binary.

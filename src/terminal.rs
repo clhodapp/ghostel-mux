@@ -1,4 +1,4 @@
-//! The session's own copy of the terminal state: a headless libghostty-vt
+//! The session's copy of the terminal state: a headless libghostty-vt
 //! terminal fed with every byte the shell writes.
 //!
 //! A snapshot of it is what an attaching Emacs starts from.  While no Emacs
@@ -15,7 +15,7 @@ use crate::ffi;
 use crate::protocol::Kitty;
 
 /// DEC private mode 2027, grapheme clustering, which ghostel turns on by
-/// default for its own terminals.
+/// default for the terminals it creates.
 const MODE_GRAPHEME_CLUSTER: ffi::GhosttyMode = 2027;
 
 /// Where terminal replies go.  Boxed so the callback's userdata pointer stays
