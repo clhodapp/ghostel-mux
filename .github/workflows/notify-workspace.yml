@@ -7,8 +7,8 @@
 # GitHub App that holds only Actions read/write on the workspace
 # repository: it can start workflow runs there and cannot touch the
 # repository's contents. The job runs only in repositories owned by
-# clhodapp, so a push to main in a fork skips it. Pushes of pin
-# updates are the output of the converge run and are skipped as well,
+# clhodapp, so a fork's push to its own main skips it. Pushes of pin
+# updates are the converge run's own output and are skipped as well,
 # since dispatching for them would only queue a run with nothing to do.
 
 name: notify-workspace
